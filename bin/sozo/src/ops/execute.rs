@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use dojo_utils::TransactionWaiter;
 use dojo_world::contracts::world::WorldContract;
 use dojo_world::metadata::Environment;
-use dojo_world::utils::TransactionWaiter;
 use starknet::accounts::{Account, Call};
 use starknet::core::utils::get_selector_from_name;
 

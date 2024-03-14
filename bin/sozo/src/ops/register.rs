@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use dojo_utils::TransactionWaiter;
 use dojo_world::contracts::model::ModelReader;
 use dojo_world::contracts::{WorldContract, WorldContractReader};
 use dojo_world::manifest::DeployedManifest;
 use dojo_world::metadata::Environment;
-use dojo_world::utils::TransactionWaiter;
 use scarb::core::Config;
 use starknet::accounts::Account;
 use starknet::core::types::{BlockId, BlockTag};
