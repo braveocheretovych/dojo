@@ -190,6 +190,10 @@ tracing = "0.1.34"
 tracing-subscriber = { version = "0.3.16", features = [ "env-filter", "json" ] }
 url = { version = "2.4.0", features = [ "serde" ] }
 
+# account-sdk = { git = "https://github.com/cartridge-gg/controller", rev = "c48d718" }
+# account-sdk = { git = "https://github.com/piniom/controller.git", rev = "58e5d39" }
+account-sdk = { path = "../../cartridge/controller-internal/crates/account_sdk" }
+
 rstest = "0.18.2"
 rstest_reuse = "0.6.0"
 
