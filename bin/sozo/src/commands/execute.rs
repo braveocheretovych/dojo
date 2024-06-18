@@ -55,6 +55,7 @@ impl ExecuteArgs {
                 self.account,
                 self.starknet,
                 &env_metadata,
+                config,
             )
             .await
             .unwrap();

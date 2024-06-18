@@ -73,6 +73,7 @@ impl AuthArgs {
                     env_metadata,
                     kind,
                     transaction,
+                    config,
                 ))
             }
             AuthCommand::Revoke { kind, world, starknet, account, transaction } => {
@@ -84,6 +85,7 @@ impl AuthArgs {
                     env_metadata,
                     kind,
                     transaction,
+                    config,
                 ))
             }
         }
@@ -115,6 +117,7 @@ pub enum AuthKind {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn grant(
     ui: &Ui,
     world: WorldOptions,
@@ -123,10 +126,12 @@ pub async fn grant(
     env_metadata: Option<Environment>,
     kind: AuthKind,
     transaction: TransactionOptions,
+    config: &Config,
 ) -> Result<()> {
     trace!(?kind, ?world, ?starknet, ?account, ?transaction, "Executing Grant command.");
-    let world =
-        utils::world_from_env_metadata(world, account, starknet, &env_metadata).await.unwrap();
+    let world = utils::world_from_env_metadata(world, account, starknet, &env_metadata, config)
+        .await
+        .unwrap();
 
     match kind {
         AuthKind::Writer { models_contracts } => {
@@ -146,6 +151,7 @@ pub async fn grant(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn revoke(
     ui: &Ui,
     world: WorldOptions,
@@ -154,10 +160,12 @@ pub async fn revoke(
     env_metadata: Option<Environment>,
     kind: AuthKind,
     transaction: TransactionOptions,
+    config: &Config,
 ) -> Result<()> {
     trace!(?kind, ?world, ?starknet, ?account, ?transaction, "Executing Revoke command.");
-    let world =
-        utils::world_from_env_metadata(world, account, starknet, &env_metadata).await.unwrap();
+    let world = utils::world_from_env_metadata(world, account, starknet, &env_metadata, config)
+        .await
+        .unwrap();
     match kind {
         AuthKind::Writer { models_contracts } => {
             trace!(

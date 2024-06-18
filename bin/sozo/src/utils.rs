@@ -7,12 +7,10 @@ use dojo_world::contracts::WorldContractReader;
 use dojo_world::metadata::{dojo_metadata_from_workspace, Environment};
 use scarb::core::{Config, TomlManifest};
 use semver::Version;
-use starknet::accounts::SingleOwnerAccount;
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::JsonRpcClient;
-use starknet::signers::LocalWallet;
 
-use crate::commands::options::account::AccountOptions;
+use crate::commands::options::account::{AccountOptions, SozoAccount};
 use crate::commands::options::starknet::StarknetOptions;
 use crate::commands::options::world::WorldOptions;
 
@@ -61,11 +59,11 @@ pub async fn world_from_env_metadata(
     account: AccountOptions,
     starknet: StarknetOptions,
     env_metadata: &Option<Environment>,
-) -> Result<WorldContract<SingleOwnerAccount<JsonRpcClient<HttpTransport>, LocalWallet>>, Error> {
+    config: &Config,
+) -> Result<WorldContract<SozoAccount<JsonRpcClient<HttpTransport>>>, Error> {
     let world_address = world.address(env_metadata.as_ref())?;
     let provider = starknet.provider(env_metadata.as_ref())?;
-
-    let account = account.account(provider, env_metadata.as_ref()).await?;
+    let account = account.account(provider, &starknet, env_metadata.as_ref(), config).await?;
     Ok(WorldContract::new(world_address, account))
 }
 
