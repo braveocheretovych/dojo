@@ -1,7 +1,7 @@
 use katana_runner::*;
 use starknet::providers::Provider;
 
-#[katana_test(2, false)]
+#[katana_test(block_time = 2)]
 async fn test_run() {
     for i in 0..10 {
         let logname = format!("katana-test_run-{}", i);
@@ -17,7 +17,7 @@ async fn test_run() {
     }
 }
 
-#[katana_test(2, true)]
+#[katana_test(block_time = 2)]
 async fn basic_macro_usage() {
     let _block_number = runner.provider().block_number().await.unwrap();
 }
