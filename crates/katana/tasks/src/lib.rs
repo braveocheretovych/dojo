@@ -1,3 +1,5 @@
+mod manager;
+
 use std::any::Any;
 use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};
