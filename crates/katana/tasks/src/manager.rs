@@ -15,14 +15,14 @@ pub struct PanickedTaskError {
 
 impl std::fmt::Display for PanickedTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = self.task_name;
         match self.error.downcast_ref::<String>() {
-            Some(msg) => write!(f, "Task `{name}` panicked with error: {msg}"),
-            None => write!(f, "Task `{name}` panicked"),
+            None => write!(f, ""),
+            Some(msg) => write!(f, "{msg}"),
         }
     }
 }
 
+#[derive(Debug)]
 struct TaskManager {
     handle: Handle,
     tracker: TaskTracker,
@@ -89,7 +89,7 @@ impl TaskManager {
             .map_err(move |error| {
                 ct.cancel();
                 let error = PanickedTaskError { task_name, error };
-                error!(%error, "Critical task failed.");
+                error!(%error, task = %task_name, "Critical task failed.");
             })
             .map(drop)
     }
