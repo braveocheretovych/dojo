@@ -22,7 +22,7 @@ pub struct PanickedTaskError {
 impl std::fmt::Display for PanickedTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.error.downcast_ref::<String>() {
-            None => write!(f, ""),
+            None => Ok(()),
             Some(msg) => write!(f, "{msg}"),
         }
     }
@@ -75,6 +75,11 @@ impl TaskManager {
         self.tracker.wait().await;
     }
 
+    /// Return the handle to the Tokio runtime that the manager is associated with.
+    pub fn handle(&self) -> &Handle {
+        &self.handle
+    }
+
     fn spawn_task<F>(&self, task: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -111,6 +116,12 @@ impl TaskManager {
                 error!(%error, task = %task_name, "Critical task failed.");
             })
             .map(drop)
+    }
+}
+
+impl Drop for TaskManager {
+    fn drop(&mut self) {
+        self.on_cancel.cancel();
     }
 }
 
