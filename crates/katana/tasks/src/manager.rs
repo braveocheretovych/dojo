@@ -1,7 +1,9 @@
-use std::{any::Any, future::Future, sync::Arc};
+use std::{any::Any, future::Future};
 
-use tokio::{runtime::Handle, sync::Notify, task::JoinHandle};
+use tokio::{runtime::Handle, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+pub type TaskHandle<T> = JoinHandle<TaskResult<T>>;
 
 #[derive(Debug, thiserror::Error)]
 pub struct CriticalTaskError {
@@ -19,21 +21,61 @@ impl std::fmt::Display for CriticalTaskError {
     }
 }
 
-struct CriticalTasks {
+struct TokioTaskManager {
     handle: Handle,
     tracker: TaskTracker,
     cancel_token: CancellationToken,
 }
 
-impl CriticalTasks {
-    pub fn spawn<F>(&self, name: &'static str, task: F)
+impl TokioTaskManager {
+    pub fn new(handle: Handle) -> Self {
+        let tracker = TaskTracker::new();
+        let cancel_token = CancellationToken::new();
+        Self { handle, cancel_token, tracker }
+    }
+
+    // spawn a task
+    //
+    // normal task can only get cancelled but cannot cancel other tasks unlike critical tasks
+    pub fn spawn<F>(&self, task: F) -> TaskHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let is_cancelled = self.cancel_token.clone();
+        self.tracker.spawn_on(
+            async move {
+                tokio::select! {
+                    res = task => TaskResult::Completed(res),
+                    _ = is_cancelled.cancelled() => TaskResult::Cancelled,
+                }
+            },
+            &self.handle,
+        )
+    }
+
+    // spawn a critical task with the given name
+    //
+    // critical tasks can cancel other tasks when they panic
+    pub fn spawn_critical<F>(&self, name: &'static str, task: F)
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let _ = self.tracker.spawn_on(self.create_task(name, task), &self.handle);
+        let task = self.create_critical_task(name, task);
+        let is_cancelled = self.cancel_token.clone();
+
+        self.tracker.spawn_on(
+            async move {
+                tokio::select! {
+                    res = task => TaskResult::Completed(res),
+                    _ = is_cancelled.cancelled() => TaskResult::Cancelled,
+                }
+            },
+            &self.handle,
+        );
     }
 
-    fn create_task<F>(&self, task_name: &'static str, task: F) -> impl Future<Output = ()>
+    fn create_critical_task<F>(&self, task_name: &'static str, task: F) -> impl Future<Output = ()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -50,61 +92,16 @@ impl CriticalTasks {
             })
             .map(drop)
     }
-}
 
-struct TokioTaskManager {
-    handle: Handle,
-    cancel_token: CancellationToken,
-    critical_tasks: CriticalTasks,
-}
-
-impl TokioTaskManager {
-    pub fn new(handle: Handle) -> Self {
-        let notify = Arc::new(Notify::new());
-        let cancel_token = CancellationToken::new();
-
-        let critical_tasks = CriticalTasks {
-            handle: handle.clone(),
-            tracker: TaskTracker::new(),
-            cancel_token: cancel_token.clone(),
-        };
-
-        Self { critical_tasks, handle, cancel_token }
-    }
-
-    // spawn a task
-    //
-    // normal task can only get cancelled but cannot cancel other tasks unlike critical tasks
-    pub fn spawn<F>(&self, task: F) -> JoinHandle<TaskResult<F::Output>>
-    where
-        F: Future + Send + 'static,
-        F::Output: Send + 'static,
-    {
-        let is_cancelled = self.cancel_token.clone();
-        self.handle.spawn(async move {
-            tokio::select! {
-                res = task => TaskResult::Completed(res),
-                _ = is_cancelled.cancelled() => TaskResult::Cancelled,
-            }
-        })
-    }
-
-    // spawn a critical task with the given name
-    //
-    // critical tasks can cancel other tasks when they panic
-    pub fn spawn_critical<F>(&self, name: &'static str, task: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let _ = self.critical_tasks.spawn(name, task);
-    }
-
-    async fn wait_shutdown(&self) {
+    pub async fn wait_shutdown(&self) {
+        // need to close the tracker first before waiting
+        let _ = self.tracker.close();
         let _ = self.cancel_token.cancelled().await;
-        self.critical_tasks.tracker.wait().await;
+        self.tracker.wait().await;
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum TaskResult<T> {
     Completed(T),
     Cancelled,
