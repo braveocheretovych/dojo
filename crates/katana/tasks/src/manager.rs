@@ -1,15 +1,21 @@
-use std::{any::Any, future::Future};
+use std::any::Any;
+use std::future::Future;
 
 use thiserror::Error;
-use tokio::{runtime::Handle, task::JoinHandle};
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 
 pub type TaskHandle<T> = JoinHandle<TaskResult<T>>;
 
 #[derive(Debug, Error)]
 pub struct PanickedTaskError {
+    /// The name of the panicked task.
     task_name: &'static str,
+    /// The error that caused the panic. It is a boxed `dyn Any` due to the future returned by
+    /// [`catch_unwind`](futures::future::FutureExt::catch_unwind).
     error: Box<dyn Any + Send>,
 }
 
@@ -24,88 +30,104 @@ impl std::fmt::Display for PanickedTaskError {
 
 #[derive(Debug)]
 struct TaskManager {
+    /// A handle to the Tokio runtime.
     handle: Handle,
+    /// Keep track of currently running tasks.
     tracker: TaskTracker,
+    /// Used to cancel all running tasks.
+    ///
+    /// This is passed to all the tasks spawned by the manager.
     on_cancel: CancellationToken,
 }
 
 impl TaskManager {
+    /// Create a new [`TaskManager`] from the given Tokio runtime handle.
     pub fn new(handle: Handle) -> Self {
         Self { handle, tracker: TaskTracker::new(), on_cancel: CancellationToken::new() }
     }
 
-    // spawn a task
-    //
-    // normal task can only get cancelled but cannot cancel other tasks unlike critical tasks
+    /// Spawn a normal task.
+    ///
+    /// Normal task can only get cancelled but cannot cancel other tasks unlike critical tasks.
     pub fn spawn<F>(&self, task: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let is_cancelled = self.on_cancel.clone();
-        self.tracker.spawn_on(
-            async move {
-                tokio::select! {
-                    res = task => TaskResult::Completed(res),
-                    _ = is_cancelled.cancelled() => TaskResult::Cancelled,
-                }
-            },
-            &self.handle,
-        )
+        self.spawn_task(task)
     }
 
-    // spawn a critical task with the given name
-    //
-    // critical tasks can cancel other tasks when they panic
-    pub fn spawn_critical<F>(&self, name: &'static str, task: F)
+    /// Spawn a critical task with the given name.
+    ///
+    /// Critical tasks will cancel other tasks when panicked.
+    pub fn spawn_critical<F>(&self, name: &'static str, task: F) -> TaskHandle<()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let task = self.create_critical_task(name, task);
-        let is_cancelled = self.on_cancel.clone();
-
-        self.tracker.spawn_on(
-            async move {
-                tokio::select! {
-                    res = task => TaskResult::Completed(res),
-                    _ = is_cancelled.cancelled() => TaskResult::Cancelled,
-                }
-            },
-            &self.handle,
-        );
+        self.spawn_task(self.critical_task(name, task))
     }
 
-    fn create_critical_task<F>(&self, task_name: &'static str, task: F) -> impl Future<Output = ()>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        use futures::{FutureExt, TryFutureExt};
-        use std::panic::AssertUnwindSafe;
-
-        // upon panic, signal to manager to cancel all tasks
-        let ct = self.on_cancel.clone();
-        AssertUnwindSafe(task)
-            .catch_unwind()
-            .map_err(move |error| {
-                ct.cancel();
-                let error = PanickedTaskError { task_name, error };
-                error!(%error, task = %task_name, "Critical task failed.");
-            })
-            .map(drop)
-    }
-
+    /// Wait until all tasks are shutdown due to cancellation.
     pub async fn wait_shutdown(&self) {
         // need to close the tracker first before waiting
         let _ = self.tracker.close();
         let _ = self.on_cancel.cancelled().await;
         self.tracker.wait().await;
     }
+
+    fn spawn_task<F>(&self, task: F) -> TaskHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let ct = self.on_cancel.clone();
+        self.tracker.spawn_on(
+            async move {
+                tokio::select! {
+                    res = task => TaskResult::Completed(res),
+                    _ = ct.cancelled() => TaskResult::Cancelled,
+                }
+            },
+            &self.handle,
+        )
+    }
+
+    fn critical_task<F>(&self, task_name: &'static str, fut: F) -> impl Future<Output = ()>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        use std::panic::AssertUnwindSafe;
+
+        use futures::{FutureExt, TryFutureExt};
+
+        let ct = self.on_cancel.clone();
+        AssertUnwindSafe(fut)
+            .catch_unwind()
+            .map_err(move |error| {
+                // signal to manager to cancel all tasks upon panic
+                ct.cancel();
+                let error = PanickedTaskError { task_name, error };
+                error!(%error, task = %task_name, "Critical task failed.");
+            })
+            .map(drop)
+    }
 }
 
-#[derive(Debug, Clone)]
+/// A task result that can be either completed or cancelled.
+#[derive(Debug, Copy, Clone)]
 pub enum TaskResult<T> {
+    /// The task completed successfully with the given result.
     Completed(T),
+    /// The task was cancelled.
     Cancelled,
+}
+
+impl<T> TaskResult<T> {
+    /// Returns true if the task was cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, TaskResult::Cancelled)
+    }
 }
 
 #[cfg(test)]
