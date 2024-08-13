@@ -1,123 +1,148 @@
-use std::{future::Future, sync::Arc};
+use std::{any::Any, future::Future, sync::Arc};
 
-use tokio::{runtime::Handle, sync::Notify, task::JoinSet};
+use tokio::{runtime::Handle, sync::Notify, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+#[derive(Debug, thiserror::Error)]
+pub struct CriticalTaskError {
+    task_name: &'static str,
+    error: Box<dyn Any + Send>,
+}
+
+impl std::fmt::Display for CriticalTaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self.task_name;
+        match self.error.downcast_ref::<String>() {
+            Some(msg) => write!(f, "Critical task `{name}` panicked with error: {msg}"),
+            None => write!(f, "Critical task `{name}` panicked"),
+        }
+    }
+}
 
 struct CriticalTasks {
     handle: Handle,
-    shutdown_signal: Arc<Notify>,
-    cancellation_token: CancellationToken,
-    critical_tasks: JoinSet<()>,
+    tracker: TaskTracker,
+    cancel_token: CancellationToken,
 }
 
 impl CriticalTasks {
-    fn spawn<F>(&mut self, task: F)
+    pub fn spawn<F>(&self, name: &'static str, task: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let _ = self.tracker.spawn_on(self.create_task(name, task), &self.handle);
+    }
+
+    fn create_task<F>(&self, task_name: &'static str, task: F) -> impl Future<Output = ()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         use futures::{FutureExt, TryFutureExt};
         use std::panic::AssertUnwindSafe;
 
-        let ct = self.cancellation_token.clone();
-        let shutdown_signal = self.shutdown_signal.clone();
-        let task = AssertUnwindSafe(task)
+        // upon panic, signal to manager to cancel all tasks
+        let ct = self.cancel_token.clone();
+        AssertUnwindSafe(task)
             .catch_unwind()
             .map_err(move |error| {
-                println!("error happened: {error:?}");
-                // let _ = shutdown_signal.notify_one();
                 ct.cancel();
-                println!("send cancel signal")
+                CriticalTaskError { task_name, error }
             })
-            .map(drop);
-
-        self.critical_tasks.spawn_on(task, &self.handle);
+            .map(drop)
     }
 }
 
-struct TokioManager {
+struct TokioTaskManager {
     handle: Handle,
-    on_shutdown: Arc<Notify>,
+    cancel_token: CancellationToken,
     critical_tasks: CriticalTasks,
 }
 
-impl TokioManager {
-    fn new(handle: Handle) -> Self {
+impl TokioTaskManager {
+    pub fn new(handle: Handle) -> Self {
         let notify = Arc::new(Notify::new());
-        let cancellation_token = CancellationToken::new();
+        let cancel_token = CancellationToken::new();
 
-        let c = CriticalTasks {
-            cancellation_token,
+        let critical_tasks = CriticalTasks {
             handle: handle.clone(),
-            critical_tasks: JoinSet::new(),
-            shutdown_signal: Arc::clone(&notify),
+            tracker: TaskTracker::new(),
+            cancel_token: cancel_token.clone(),
         };
 
-        Self { critical_tasks: c, handle, on_shutdown: notify }
+        Self { critical_tasks, handle, cancel_token }
     }
 
-    fn spawn_critical<F>(&mut self, task: F)
+    // spawn a task
+    //
+    // normal task can only get cancelled but cannot cancel other tasks unlike critical tasks
+    pub fn spawn<F>(&self, task: F) -> JoinHandle<TaskResult<F::Output>>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let is_cancelled = self.cancel_token.clone();
+        self.handle.spawn(async move {
+            tokio::select! {
+                res = task => TaskResult::Completed(res),
+                _ = is_cancelled.cancelled() => TaskResult::Cancelled,
+            }
+        })
+    }
+
+    // spawn a critical task with the given name
+    //
+    // critical tasks can cancel other tasks when they panic
+    pub fn spawn_critical<F>(&self, name: &'static str, task: F)
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let _ = self.critical_tasks.spawn(task);
+        let _ = self.critical_tasks.spawn(name, task);
     }
 
-    async fn wait_shutdown(mut self) {
-        let _ = self.on_shutdown.notified().await;
-        self.critical_tasks.critical_tasks.shutdown().await;
+    async fn wait_shutdown(&self) {
+        let _ = self.cancel_token.cancelled().await;
+        self.critical_tasks.tracker.wait().await;
     }
+}
 
-    fn wait_shutdown_or_ctrl_c_signal(mut self) {}
+pub enum TaskResult<T> {
+    Completed(T),
+    Cancelled,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        time::Duration,
-    };
+    use std::time::Duration;
 
     use super::*;
 
     #[test]
     fn goofy_ahh() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(8)
-            .thread_name_fn(|| {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("my-pool-{}", id)
-            })
-            .enable_all()
-            .on_thread_stop(|| {
-                println!("thread stopped {:?}", std::thread::current().name());
-            })
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
 
-        let mut manager = TokioManager::new(rt.handle().clone());
+        let manager = TokioTaskManager::new(rt.handle().clone());
 
-        manager.spawn_critical(async {
+        manager.spawn_critical("task 1", async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             println!("task 1")
         });
 
-        manager.spawn_critical(async {
+        manager.spawn_critical("task 2", async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             println!("task 2")
         });
 
-        manager.spawn_critical(async {
+        manager.spawn_critical("task 3", async {
             tokio::time::sleep(Duration::from_secs(5)).await;
             println!("task 3")
         });
 
-        manager.spawn_critical(async {
+        manager.spawn_critical("task 4", async {
             tokio::time::sleep(Duration::from_secs(3)).await;
             panic!("ahh i panicked")
         });
 
-        manager.spawn_critical(async {
+        manager.spawn_critical("task 5", async {
             println!("thread {:?}", std::thread::current().name());
 
             loop {
@@ -126,6 +151,6 @@ mod tests {
             }
         });
 
-        manager.wait_shutdown();
+        rt.block_on(manager.wait_shutdown());
     }
 }
