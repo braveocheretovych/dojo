@@ -1,37 +1,37 @@
 use std::{any::Any, future::Future};
 
+use thiserror::Error;
 use tokio::{runtime::Handle, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tracing::error;
 
 pub type TaskHandle<T> = JoinHandle<TaskResult<T>>;
 
-#[derive(Debug, thiserror::Error)]
-pub struct CriticalTaskError {
+#[derive(Debug, Error)]
+pub struct PanickedTaskError {
     task_name: &'static str,
     error: Box<dyn Any + Send>,
 }
 
-impl std::fmt::Display for CriticalTaskError {
+impl std::fmt::Display for PanickedTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = self.task_name;
         match self.error.downcast_ref::<String>() {
-            Some(msg) => write!(f, "Critical task `{name}` panicked with error: {msg}"),
-            None => write!(f, "Critical task `{name}` panicked"),
+            Some(msg) => write!(f, "Task `{name}` panicked with error: {msg}"),
+            None => write!(f, "Task `{name}` panicked"),
         }
     }
 }
 
-struct TokioTaskManager {
+struct TaskManager {
     handle: Handle,
     tracker: TaskTracker,
-    cancel_token: CancellationToken,
+    on_cancel: CancellationToken,
 }
 
-impl TokioTaskManager {
+impl TaskManager {
     pub fn new(handle: Handle) -> Self {
-        let tracker = TaskTracker::new();
-        let cancel_token = CancellationToken::new();
-        Self { handle, cancel_token, tracker }
+        Self { handle, tracker: TaskTracker::new(), on_cancel: CancellationToken::new() }
     }
 
     // spawn a task
@@ -42,7 +42,7 @@ impl TokioTaskManager {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let is_cancelled = self.cancel_token.clone();
+        let is_cancelled = self.on_cancel.clone();
         self.tracker.spawn_on(
             async move {
                 tokio::select! {
@@ -62,7 +62,7 @@ impl TokioTaskManager {
         F: Future<Output = ()> + Send + 'static,
     {
         let task = self.create_critical_task(name, task);
-        let is_cancelled = self.cancel_token.clone();
+        let is_cancelled = self.on_cancel.clone();
 
         self.tracker.spawn_on(
             async move {
@@ -83,12 +83,13 @@ impl TokioTaskManager {
         use std::panic::AssertUnwindSafe;
 
         // upon panic, signal to manager to cancel all tasks
-        let ct = self.cancel_token.clone();
+        let ct = self.on_cancel.clone();
         AssertUnwindSafe(task)
             .catch_unwind()
             .map_err(move |error| {
                 ct.cancel();
-                CriticalTaskError { task_name, error }
+                let error = PanickedTaskError { task_name, error };
+                error!(%error, "Critical task failed.");
             })
             .map(drop)
     }
@@ -96,7 +97,7 @@ impl TokioTaskManager {
     pub async fn wait_shutdown(&self) {
         // need to close the tracker first before waiting
         let _ = self.tracker.close();
-        let _ = self.cancel_token.cancelled().await;
+        let _ = self.on_cancel.cancelled().await;
         self.tracker.wait().await;
     }
 }
@@ -116,8 +117,7 @@ mod tests {
     #[test]
     fn goofy_ahh() {
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-
-        let manager = TokioTaskManager::new(rt.handle().clone());
+        let manager = TaskManager::new(rt.handle().clone());
 
         manager.spawn_critical("task 1", async {
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -130,8 +130,10 @@ mod tests {
         });
 
         manager.spawn_critical("task 3", async {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            println!("task 3")
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                println!("im doing stuff in task 3")
+            }
         });
 
         manager.spawn_critical("task 4", async {
@@ -139,9 +141,7 @@ mod tests {
             panic!("ahh i panicked")
         });
 
-        manager.spawn_critical("task 5", async {
-            println!("thread {:?}", std::thread::current().name());
-
+        manager.spawn(async {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 println!("im doing stuff")

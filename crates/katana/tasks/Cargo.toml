@@ -6,8 +6,13 @@ version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+dojo-metrics.workspace = true
 futures.workspace = true
+metrics.workspace = true
+parking_lot.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-metrics = "0.3.1"
 tokio-util = { version = "0.7.11", features = [ "rt" ] }
+tracing.workspace = true

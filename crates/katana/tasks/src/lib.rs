@@ -1,4 +1,5 @@
 mod manager;
+mod metrics;
 
 use std::any::Any;
 use std::future::Future;

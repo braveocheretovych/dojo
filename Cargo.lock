@@ -8091,11 +8091,16 @@ dependencies = [
 name = "katana-tasks"
 version = "1.0.0-alpha.5"
 dependencies = [
+ "dojo-metrics",
  "futures",
+ "metrics",
+ "parking_lot 0.12.3",
  "rayon",
  "thiserror",
  "tokio",
+ "tokio-metrics",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -14163,6 +14168,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.71",
+]
+
+[[package]]
+name = "tokio-metrics"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eace09241d62c98b7eeb1107d4c5c64ca3bd7da92e8c218c153ab3a78f9be112"
+dependencies = [
+ "futures-util",
+ "pin-project-lite",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
