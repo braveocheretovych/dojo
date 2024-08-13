@@ -300,3 +300,27 @@ pub struct NodeHandle {
     pub config: ServerConfig,
     pub handle: ServerHandle,
 }
+
+// pub struct Handle<Pool, EF, Provider>
+// where
+//     EF: ExecutorFactory,
+//     Pool: TransactionPool,
+// {
+//     pool: Pool,
+//     executor: EF,
+//     provider: Provider,
+//     block_producer: BlockProducer<EF>,
+//     backend: Arc<Backend<EF>>,
+//     server: ServerHandle,
+//     task_manager: TaskManager,
+// }
+
+// #[derive(Debug, Clone)]
+// pub struct ServerHandle {
+//     pub addr: SocketAddr,
+//     pub config: ServerConfig,
+//     pub metrics: Option<()>,
+//     pub rpc: RpcServerHandle,
+// }
+
+// fn foo() {}

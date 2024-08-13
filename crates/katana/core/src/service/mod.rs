@@ -4,6 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use futures::channel::mpsc::Receiver;
 use futures::stream::{Fuse, Stream, StreamExt};
@@ -99,6 +100,8 @@ impl<EF: ExecutorFactory> Future for NodeService<EF> {
                         let steps_used = outcome.stats.cairo_steps_used;
                         metrics.l1_gas_processed_total.increment(gas_used as u64);
                         metrics.cairo_steps_processed_total.increment(steps_used as u64);
+
+                        panic!("node service stop");
                     }
 
                     Err(err) => {
