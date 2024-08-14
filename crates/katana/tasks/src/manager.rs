@@ -49,13 +49,15 @@ impl TaskManager {
     /// Spawn a normal task.
     ///
     /// Normal task can only get cancelled but cannot cancel other tasks unlike critical tasks.
-    pub fn spawn<F>(&self, task: F) -> TaskHandle<F::Output>
+    pub fn spawn<F>(&self, fut: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.spawn_task(task)
+        self.spawn_inner(fut)
     }
+
+    // pub async fn spawn_task<F>(&self, task: Task)
 
     /// Spawn a critical task with the given name.
     ///
@@ -64,7 +66,7 @@ impl TaskManager {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_task(self.critical_task(name, task))
+        self.spawn_inner(self.critical_task(name, task))
     }
 
     /// Wait until all tasks are shutdown due to cancellation.
@@ -80,7 +82,7 @@ impl TaskManager {
         &self.handle
     }
 
-    fn spawn_task<F>(&self, task: F) -> TaskHandle<F::Output>
+    fn spawn_inner<F>(&self, task: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,

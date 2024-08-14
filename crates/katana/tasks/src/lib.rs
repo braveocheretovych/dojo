@@ -2,6 +2,7 @@
 
 mod manager;
 mod metrics;
+mod task;
 
 use std::any::Any;
 use std::future::Future;
